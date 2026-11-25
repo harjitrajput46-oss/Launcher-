@@ -1,0 +1,548 @@
+name: Build GLASS TV APK
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Generate GLASS TV project files
+        run: |
+          mkdir -p app/src/main/java/com/glass/tv
+
+          cat > settings.gradle <<'EOF'
+          include ':app'
+          rootProject.name = 'GLASS-TV'
+          EOF
+
+          cat > build.gradle <<'EOF'
+          buildscript {
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+              dependencies {
+                  classpath 'com.android.tools.build:gradle:4.2.2'
+              }
+          }
+          allprojects {
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          EOF
+
+          cat > gradle.properties <<'EOF'
+          org.gradle.jvmargs=-Xmx2g
+          android.useAndroidX=false
+          EOF
+
+          cat > app/build.gradle <<'EOF'
+          apply plugin: 'com.android.application'
+
+          android {
+              compileSdkVersion 30
+              buildToolsVersion "30.0.3"
+              defaultConfig {
+                  applicationId "com.glass.tv"
+                  minSdkVersion 22
+                  targetSdkVersion 22
+                  versionCode 1
+                  versionName "1.0"
+              }
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_1_8
+                  targetCompatibility JavaVersion.VERSION_1_8
+              }
+              lintOptions {
+                  abortOnError false
+                  checkReleaseBuilds false
+              }
+          }
+          EOF
+
+          cat > app/src/main/AndroidManifest.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+              package="com.glass.tv">
+
+              <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
+              <uses-feature android:name="android.software.leanback" android:required="false" />
+
+              <application
+                  android:allowBackup="false"
+                  android:label="GLASS TV"
+                  android:theme="@android:style/Theme.Holo.NoActionBar.Fullscreen">
+
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:launchMode="singleTask"
+                      android:screenOrientation="landscape"
+                      android:configChanges="keyboard|keyboardHidden|navigation|orientation|screenSize|uiMode">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.HOME" />
+                          <category android:name="android.intent.category.DEFAULT" />
+                      </intent-filter>
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                          <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+
+          cat > app/src/main/java/com/glass/tv/MainActivity.java <<'EOF'
+          package com.glass.tv;
+
+          import android.app.Activity;
+          import android.content.Intent;
+          import android.content.pm.PackageManager;
+          import android.content.pm.ResolveInfo;
+          import android.graphics.Color;
+          import android.graphics.drawable.GradientDrawable;
+          import android.graphics.drawable.StateListDrawable;
+          import android.os.Bundle;
+          import android.provider.Settings;
+          import android.view.Gravity;
+          import android.view.KeyEvent;
+          import android.view.View;
+          import android.widget.HorizontalScrollView;
+          import android.widget.ImageView;
+          import android.widget.LinearLayout;
+          import android.widget.ScrollView;
+          import android.widget.TextClock;
+          import android.widget.TextView;
+          import android.widget.Toast;
+
+          import java.util.ArrayList;
+          import java.util.Collections;
+          import java.util.Comparator;
+          import java.util.HashSet;
+          import java.util.List;
+          import java.util.Set;
+
+          public class MainActivity extends Activity {
+
+              static final String[] TABS = {"Home", "Movies", "TV Shows", "Anime", "Apps", "Live TV", "Library"};
+              static final int[][] PAL = {
+                  {0xFF1E3C72, 0xFF2A5298}, {0xFF42275A, 0xFF734B6D}, {0xFF134E5E, 0xFF71B280},
+                  {0xFF8E2DE2, 0xFF4A00E0}, {0xFF232526, 0xFF414345}, {0xFFB24592, 0xFFF15F79},
+                  {0xFF0F2027, 0xFF2C5364}, {0xFFCB2D3E, 0xFFEF473A}
+              };
+              static final int BLUE = 0xFF3AA0FF;
+
+              TextView[] tabs = new TextView[TABS.length];
+              LinearLayout content;
+              ScrollView scroll;
+              int cur = -1;
+              float d;
+              PackageManager pm;
+              List<ResolveInfo> dockApps = new ArrayList<>();
+              List<ResolveInfo> allApps = new ArrayList<>();
+
+              int dp(int v) { return (int) (v * d + 0.5f); }
+
+              @Override
+              protected void onCreate(Bundle b) {
+                  super.onCreate(b);
+                  d = getResources().getDisplayMetrics().density;
+                  pm = getPackageManager();
+                  loadApps();
+
+                  LinearLayout root = new LinearLayout(this);
+                  root.setOrientation(LinearLayout.VERTICAL);
+                  GradientDrawable bg = new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
+                          new int[]{0xFF0B1020, 0xFF16264A, 0xFF080C18});
+                  root.setBackground(bg);
+                  root.setPadding(dp(32), dp(16), dp(32), 0);
+                  root.addView(topBar());
+
+                  scroll = new ScrollView(this);
+                  scroll.setVerticalScrollBarEnabled(false);
+                  scroll.setClipToPadding(false);
+                  content = new LinearLayout(this);
+                  content.setOrientation(LinearLayout.VERTICAL);
+                  content.setPadding(0, dp(12), 0, dp(40));
+                  scroll.addView(content);
+                  root.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1f));
+                  setContentView(root);
+
+                  show(0);
+                  tabs[0].requestFocus();
+              }
+
+              // ---------- apps ----------
+              void loadApps() {
+                  Intent lb = new Intent(Intent.ACTION_MAIN);
+                  lb.addCategory(Intent.CATEGORY_LEANBACK_LAUNCHER);
+                  Intent ln = new Intent(Intent.ACTION_MAIN);
+                  ln.addCategory(Intent.CATEGORY_LAUNCHER);
+                  Set<String> seen = new HashSet<>();
+                  for (ResolveInfo ri : pm.queryIntentActivities(lb, 0)) {
+                      if (ri.activityInfo.packageName.equals(getPackageName())) continue;
+                      if (seen.add(ri.activityInfo.packageName)) { dockApps.add(ri); allApps.add(ri); }
+                  }
+                  for (ResolveInfo ri : pm.queryIntentActivities(ln, 0)) {
+                      if (ri.activityInfo.packageName.equals(getPackageName())) continue;
+                      if (seen.add(ri.activityInfo.packageName)) allApps.add(ri);
+                  }
+                  Comparator<ResolveInfo> c = (x, y) ->
+                          x.loadLabel(pm).toString().compareToIgnoreCase(y.loadLabel(pm).toString());
+                  Collections.sort(dockApps, c);
+                  Collections.sort(allApps, c);
+                  if (dockApps.isEmpty()) {
+                      for (int i = 0; i < allApps.size() && i < 12; i++) dockApps.add(allApps.get(i));
+                  }
+              }
+
+              void launch(ResolveInfo ri) {
+                  try {
+                      Intent i = new Intent(Intent.ACTION_MAIN);
+                      i.setClassName(ri.activityInfo.packageName, ri.activityInfo.name);
+                      i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
+                      startActivity(i);
+                  } catch (Exception e) {
+                      Toast.makeText(this, "App open nahi hua", Toast.LENGTH_SHORT).show();
+                  }
+              }
+
+              void openSettings() {
+                  try {
+                      Intent i = new Intent(Settings.ACTION_SETTINGS);
+                      i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                      startActivity(i);
+                  } catch (Exception e) {
+                      Toast.makeText(this, "Settings open nahi hui", Toast.LENGTH_SHORT).show();
+                  }
+              }
+
+              // ---------- drawing helpers ----------
+              GradientDrawable shape(int[] colors, int radius, int strokeW, int strokeC) {
+                  GradientDrawable g = new GradientDrawable(GradientDrawable.Orientation.TL_BR, colors);
+                  g.setCornerRadius(radius);
+                  g.setStroke(strokeW, strokeC);
+                  return g;
+              }
+
+              StateListDrawable focusBg(int[] colors, int radius) {
+                  StateListDrawable s = new StateListDrawable();
+                  s.addState(new int[]{android.R.attr.state_focused}, shape(colors, radius, dp(3), BLUE));
+                  s.addState(new int[]{}, shape(colors, radius, dp(1), 0x44FFFFFF));
+                  return s;
+              }
+
+              void focusAnim(View v) {
+                  v.setOnFocusChangeListener((x, f) ->
+                          x.animate().scaleX(f ? 1.08f : 1f).scaleY(f ? 1.08f : 1f).setDuration(120).start());
+              }
+
+              TextView tv(String t, int size, int color, boolean bold) {
+                  TextView v = new TextView(this);
+                  v.setText(t);
+                  v.setTextSize(size);
+                  v.setTextColor(color);
+                  if (bold) v.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+                  return v;
+              }
+
+              // ---------- top bar ----------
+              View topBar() {
+                  LinearLayout bar = new LinearLayout(this);
+                  bar.setOrientation(LinearLayout.HORIZONTAL);
+                  bar.setGravity(Gravity.CENTER_VERTICAL);
+                  bar.setPadding(0, 0, 0, dp(6));
+
+                  TextView logo = tv("GLASS TV", 20, Color.WHITE, true);
+                  logo.setPadding(0, 0, dp(24), 0);
+                  bar.addView(logo);
+
+                  LinearLayout pill = new LinearLayout(this);
+                  pill.setOrientation(LinearLayout.HORIZONTAL);
+                  pill.setGravity(Gravity.CENTER_VERTICAL);
+                  pill.setPadding(dp(6), dp(6), dp(6), dp(6));
+                  pill.setBackground(shape(new int[]{0x33FFFFFF, 0x14FFFFFF}, dp(30), dp(1), 0x44FFFFFF));
+                  for (int i = 0; i < TABS.length; i++) {
+                      final int idx = i;
+                      TextView t = tv(TABS[i], 14, 0xFFDDDDDD, false);
+                      t.setPadding(dp(14), dp(8), dp(14), dp(8));
+                      t.setFocusable(true);
+                      t.setOnFocusChangeListener((v, f) -> { if (f) show(idx); styleTabs(f ? idx : -1); });
+                      t.setOnClickListener(v -> show(idx));
+                      tabs[i] = t;
+                      pill.addView(t);
+                  }
+                  bar.addView(pill);
+
+                  View sp = new View(this);
+                  bar.addView(sp, new LinearLayout.LayoutParams(0, 1, 1f));
+
+                  TextView search = tv("Search", 14, Color.WHITE, false);
+                  TextView set = tv("Settings", 14, Color.WHITE, false);
+                  for (TextView t : new TextView[]{search, set}) {
+                      t.setPadding(dp(14), dp(8), dp(14), dp(8));
+                      t.setFocusable(true);
+                      t.setBackground(focusBg(new int[]{0x33FFFFFF, 0x14FFFFFF}, dp(20)));
+                      focusAnim(t);
+                      LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -2);
+                      lp.setMargins(dp(4), 0, dp(4), 0);
+                      bar.addView(t, lp);
+                  }
+                  search.setOnClickListener(v -> Toast.makeText(this, "Search jald aayega", Toast.LENGTH_SHORT).show());
+                  set.setOnClickListener(v -> openSettings());
+
+                  TextClock clock = new TextClock(this);
+                  clock.setFormat24Hour("HH:mm");
+                  clock.setFormat12Hour("HH:mm");
+                  clock.setTextSize(18);
+                  clock.setTextColor(Color.WHITE);
+                  clock.setPadding(dp(14), 0, 0, 0);
+                  bar.addView(clock);
+                  return bar;
+              }
+
+              void styleTabs(int focused) {
+                  for (int i = 0; i < tabs.length; i++) {
+                      boolean sel = i == cur;
+                      tabs[i].setTextColor(sel ? Color.WHITE : 0xFFBBBBBB);
+                      if (i == focused) {
+                          tabs[i].setBackground(shape(new int[]{0x66FFFFFF, 0x44FFFFFF}, dp(24), dp(3), BLUE));
+                      } else if (sel) {
+                          tabs[i].setBackground(shape(new int[]{0x55FFFFFF, 0x33FFFFFF}, dp(24), dp(1), 0x66FFFFFF));
+                      } else {
+                          tabs[i].setBackground(null);
+                      }
+                  }
+              }
+
+              // ---------- content ----------
+              void show(int i) {
+                  if (i == cur) return;
+                  cur = i;
+                  styleTabs(i);
+                  content.removeAllViews();
+                  switch (i) {
+                      case 0:
+                          content.addView(hero());
+                          content.addView(label("Applications"));
+                          content.addView(dock());
+                          content.addView(label("Continue Watching"));
+                          content.addView(sampleRow(5, 0, 230, 130, "Episode"));
+                          content.addView(label("Trending Movies"));
+                          content.addView(sampleRow(6, 2, 230, 130, "Movie"));
+                          content.addView(label("TV Shows"));
+                          content.addView(sampleRow(6, 4, 230, 130, "Series"));
+                          content.addView(label("Anime Collection"));
+                          content.addView(sampleRow(6, 1, 230, 130, "Anime"));
+                          content.addView(label("Recommended For You"));
+                          content.addView(sampleRow(6, 5, 230, 130, "Sample"));
+                          break;
+                      case 1:
+                          content.addView(label("Trending Movies"));
+                          content.addView(sampleRow(8, 0, 260, 146, "Movie"));
+                          content.addView(label("Popular Movies"));
+                          content.addView(sampleRow(8, 3, 260, 146, "Movie"));
+                          content.addView(label("Recently Added"));
+                          content.addView(sampleRow(8, 6, 260, 146, "Movie"));
+                          break;
+                      case 2:
+                          content.addView(label("TV Shows"));
+                          content.addView(sampleRow(8, 1, 260, 146, "Series"));
+                          content.addView(label("Season 1 - Episodes"));
+                          content.addView(sampleRow(8, 4, 200, 112, "S1 E"));
+                          break;
+                      case 3:
+                          content.addView(label("Anime Collection"));
+                          content.addView(sampleRow(8, 5, 260, 146, "Anime"));
+                          content.addView(label("Popular Anime"));
+                          content.addView(sampleRow(8, 7, 260, 146, "Anime"));
+                          break;
+                      case 4:
+                          content.addView(label("All Applications"));
+                          appsGrid();
+                          break;
+                      case 5:
+                          content.addView(label("Live TV"));
+                          content.addView(card("No playlist added", "Authorized M3U/IPTV playlist support jald aayega",
+                                  PAL[6][0], PAL[6][1], dp(520), dp(150), null));
+                          break;
+                      case 6:
+                          content.addView(label("Continue Watching"));
+                          content.addView(sampleRow(5, 2, 230, 130, "Episode"));
+                          content.addView(label("Favorites"));
+                          content.addView(sampleRow(5, 5, 230, 130, "Favorite"));
+                          break;
+                  }
+                  scroll.scrollTo(0, 0);
+              }
+
+              View label(String t) {
+                  TextView v = tv(t, 20, Color.WHITE, true);
+                  v.setPadding(dp(6), dp(14), 0, 0);
+                  return v;
+              }
+
+              HorizontalScrollView hs(LinearLayout row) {
+                  HorizontalScrollView h = new HorizontalScrollView(this);
+                  h.setHorizontalScrollBarEnabled(false);
+                  h.setClipToPadding(false);
+                  h.setClipChildren(false);
+                  h.setPadding(0, dp(14), 0, dp(14));
+                  row.setOrientation(LinearLayout.HORIZONTAL);
+                  row.setClipChildren(false);
+                  h.addView(row);
+                  return h;
+              }
+
+              View card(String t, String s, int c1, int c2, int w, int h, Runnable r) {
+                  LinearLayout v = new LinearLayout(this);
+                  v.setOrientation(LinearLayout.VERTICAL);
+                  v.setGravity(Gravity.BOTTOM);
+                  v.setPadding(dp(14), dp(10), dp(14), dp(12));
+                  v.setBackground(focusBg(new int[]{c1, c2}, dp(16)));
+                  v.addView(tv(t, w > dp(400) ? 26 : 15, Color.WHITE, true));
+                  if (s != null) v.addView(tv(s, 12, 0xCCFFFFFF, false));
+                  v.setFocusable(true);
+                  v.setClickable(true);
+                  final Runnable act = r != null ? r : () ->
+                          Toast.makeText(this, "Sample content", Toast.LENGTH_SHORT).show();
+                  v.setOnClickListener(x -> act.run());
+                  focusAnim(v);
+                  LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(w, h);
+                  lp.setMargins(dp(8), 0, dp(8), 0);
+                  v.setLayoutParams(lp);
+                  return v;
+              }
+
+              View hero() {
+                  LinearLayout row = new LinearLayout(this);
+                  row.addView(card("Sample Featured Show", "Placeholder artwork - Watch Now",
+                          PAL[0][0], PAL[0][1], dp(460), dp(210), null));
+                  row.addView(card("Sample Featured Movie", "Placeholder artwork - Watch Now",
+                          PAL[3][0], PAL[3][1], dp(460), dp(210), null));
+                  row.addView(card("Sample Featured Anime", "Placeholder artwork - Watch Now",
+                          PAL[5][0], PAL[5][1], dp(460), dp(210), null));
+                  return hs(row);
+              }
+
+              View sampleRow(int n, int offset, int w, int h, String name) {
+                  LinearLayout row = new LinearLayout(this);
+                  for (int i = 0; i < n; i++) {
+                      int[] p = PAL[(i + offset) % PAL.length];
+                      row.addView(card(name + " " + (i + 1), "Sample", p[0], p[1], dp(w), dp(h), null));
+                  }
+                  return hs(row);
+              }
+
+              View appTile(final ResolveInfo ri, boolean withLabel) {
+                  LinearLayout box = new LinearLayout(this);
+                  box.setOrientation(LinearLayout.VERTICAL);
+                  box.setGravity(Gravity.CENTER_HORIZONTAL);
+                  ImageView iv = new ImageView(this);
+                  iv.setImageDrawable(ri.loadIcon(pm));
+                  iv.setScaleType(ImageView.ScaleType.FIT_CENTER);
+                  iv.setPadding(dp(12), dp(12), dp(12), dp(12));
+                  iv.setBackground(focusBg(new int[]{0x44FFFFFF, 0x1AFFFFFF}, dp(20)));
+                  iv.setFocusable(true);
+                  iv.setClickable(true);
+                  iv.setOnClickListener(x -> launch(ri));
+                  focusAnim(iv);
+                  box.addView(iv, new LinearLayout.LayoutParams(dp(92), dp(92)));
+                  if (withLabel) {
+                      TextView t = tv(ri.loadLabel(pm).toString(), 12, 0xFFDDDDDD, false);
+                      t.setSingleLine(true);
+                      t.setGravity(Gravity.CENTER);
+                      t.setPadding(0, dp(6), 0, 0);
+                      box.addView(t, new LinearLayout.LayoutParams(dp(92), -2));
+                  }
+                  LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -2);
+                  lp.setMargins(dp(8), 0, dp(8), 0);
+                  box.setLayoutParams(lp);
+                  return box;
+              }
+
+              View dock() {
+                  LinearLayout row = new LinearLayout(this);
+                  if (dockApps.isEmpty()) {
+                      row.addView(tv("Koi app nahi mili", 16, Color.WHITE, false));
+                  }
+                  for (ResolveInfo ri : dockApps) row.addView(appTile(ri, false));
+                  HorizontalScrollView h = hs(row);
+                  h.setBackground(shape(new int[]{0x2EFFFFFF, 0x14FFFFFF}, dp(28), dp(1), 0x55FFFFFF));
+                  h.setPadding(dp(12), dp(14), dp(12), dp(14));
+                  LinearLayout wrap = new LinearLayout(this);
+                  wrap.setPadding(0, dp(8), 0, dp(8));
+                  wrap.addView(h, new LinearLayout.LayoutParams(-1, -2));
+                  return wrap;
+              }
+
+              void appsGrid() {
+                  int perRow = 8;
+                  LinearLayout row = null;
+                  for (int i = 0; i < allApps.size(); i++) {
+                      if (i % perRow == 0) {
+                          row = new LinearLayout(this);
+                          row.setOrientation(LinearLayout.HORIZONTAL);
+                          row.setPadding(0, dp(8), 0, dp(8));
+                          content.addView(row);
+                      }
+                      row.addView(appTile(allApps.get(i), true));
+                  }
+              }
+
+              // ---------- remote keys ----------
+              @Override
+              public boolean onKeyDown(int keyCode, KeyEvent e) {
+                  if (keyCode == KeyEvent.KEYCODE_MENU) { openSettings(); return true; }
+                  return super.onKeyDown(keyCode, e);
+              }
+
+              @Override
+              public void onBackPressed() {
+                  // Launcher: Back se bahar nahi jaana, Home tab par wapas
+                  scroll.scrollTo(0, 0);
+                  if (cur >= 0) tabs[cur].requestFocus();
+              }
+          }
+          EOF
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        run: |
+          sdkmanager "platforms;android-30" "build-tools;30.0.3"
+
+      - name: Switch to JDK 11 for Gradle build
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '11'
+
+      - name: Setup Gradle 7.0.2
+        run: |
+          wget -q https://services.gradle.org/distributions/gradle-7.0.2-bin.zip
+          unzip -q gradle-7.0.2-bin.zip -d "$HOME"
+
+      - name: Build debug APK
+        run: |
+          "$HOME/gradle-7.0.2/bin/gradle" assembleDebug --stacktrace --no-daemon
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: GLASS-TV-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
